@@ -1,0 +1,329 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Minwoo Go — Portfolio (one line per corner)</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    html, body { width: 100%; height: 100%; overflow: hidden; background: #fff; }
+    canvas { display: block; }
+    #tip {
+      position: fixed;
+      pointer-events: none;
+      padding: 5px 11px;
+      background: rgba(0, 0, 0, 0.82);
+      color: #fff;
+      font: 12px/1.5 'Helvetica Neue', Helvetica, Arial, sans-serif;
+      border-radius: 3px;
+      display: none;
+      z-index: 10;
+      max-width: 360px;
+      word-break: break-all;
+    }
+  </style>
+</head>
+<body>
+  <canvas id="c"></canvas>
+  <div id="tip"></div>
+<script>
+'use strict';
+
+const cvs   = document.getElementById('c');
+const ctx   = cvs.getContext('2d');
+const tipEl = document.getElementById('tip');
+
+/* ── Data ──────────────────────────────────────────────────────────── */
+const LINKS = [
+  { label: '2',  img: 'w2',  url: 'https://editor.p5js.org/53nu/sketches/q2NrS53AZ' },
+  { label: '3',  img: 'w3',  url: 'https://editor.p5js.org/53nu/full/Ki3_w7lFV' },
+  { label: '4',  img: 'w4',  url: 'https://editor.p5js.org/53nu/full/itQgAyuwp' },
+  { label: '6',  img: 'w6',  url: 'https://editor.p5js.org/53nu/full/VzazTcv2w' },
+  { label: '7',  img: 'w7',  url: 'https://editor.p5js.org/53nu/full/xwXlPtz-s' },
+  { label: '8',  img: 'w8',  url: 'https://editor.p5js.org/53nu/full/pakM2BL91' },
+  { label: '10', img: 'w10', url: 'https://line2-rjdw.onrender.com/' },
+];
+
+// Preload each week's image — shown behind the number while its box is hovered.
+const IMAGES = {};
+for (const lk of LINKS) {
+  const im = new Image();
+  im.src = `image/${lk.img}.png`;
+  IMAGES[lk.label] = im;
+}
+
+/* ── Constants ─────────────────────────────────────────────────────── */
+const LW    = 3;    // line width (px) — thin grid
+const PAD   = 18;   // minimum empty gap kept between blocks
+const DEDGE = 30;   // minimum spacing between any two parallel edges (no doubles)
+const PALETTE = ['#D40920', '#F5D306', '#1B5FA8'];  // box colors, assigned at random
+
+/* ── State ─────────────────────────────────────────────────────────── */
+// Blocks are placed freely & big, then every edge is drawn as a canvas-spanning
+// line that gets cut wherever it would cross another block — so the blocks stay
+// woven into one grid (not floating) while keeping a scattered composition.
+let W = 0, H = 0;
+let blocks = [];        // { baseX, baseY, baseS, amp/phase/freq…, color, link|null }
+let liveSquares = [];   // resolved link blocks this frame, for hit-testing
+let hoverLink = null;
+
+/* ── Utilities ─────────────────────────────────────────────────────── */
+const rand = (a, b) => a + Math.random() * (b - a);
+
+function shuffle(arr) {
+  const a = [...arr];
+  for (let i = a.length - 1; i > 0; i--) {
+    const j = 0 | (Math.random() * (i + 1));
+    [a[i], a[j]] = [a[j], a[i]];
+  }
+  return a;
+}
+
+// n colors from PALETTE, each appearing as evenly as possible (so every palette
+// color is guaranteed on screen), then shuffled.
+function colorPool(n) {
+  const base = Math.floor(n / PALETTE.length);
+  const extra = n % PALETTE.length;
+  const pool = [];
+  shuffle([...PALETTE]).forEach((c, i) => {
+    for (let k = 0; k < base + (i < extra ? 1 : 0); k++) pool.push(c);
+  });
+  return shuffle(pool);
+}
+
+/* ── Layout ─────────────────────────────────────────────────────────── */
+function genLayout() {
+  W = cvs.width  = window.innerWidth;
+  H = cvs.height = window.innerHeight;
+  const minD = Math.min(W, H);
+
+  blocks = [];
+  // Big colored link squares — colors from a balanced pool so red, yellow and
+  // blue are always present and spread evenly across the boxes.
+  const colors = colorPool(LINKS.length);
+  shuffle(LINKS).forEach((link, i) =>
+    placeBlock(colors[i], link, minD * 0.16, minD * 0.40));
+  // …then 2–4 black blocks for Mondrian weight.
+  const nBlack = 2 + (0 | rand(0, 3));
+  for (let i = 0; i < nBlack; i++)
+    placeBlock('#111', null, minD * 0.10, minD * 0.24);
+}
+
+function placeBlock(color, link, smin, smax) {
+  for (let k = 0; k < 8; k++)
+    if (tryBlock(color, link, smin * (1 - k * 0.07), smax * (1 - k * 0.08), false)) return;
+  tryBlock(color, link, smin * 0.55, smin * 0.8, true);  // relaxed last resort
+}
+
+function tryBlock(color, link, smin, smax, relaxed) {
+  for (let t = 0; t < 2500; t++) {
+    const s  = rand(smin, smax);
+    const ax = rand(3, 8), ay = rand(3, 8), as = rand(3, 9);
+    const m  = LW + Math.max(ax, ay) + as + 2;
+    if (W - 2 * m - s < 4 || H - 2 * m - s < 4) continue;
+    const x = rand(m, W - m - s), y = rand(m, H - m - s);
+    if (!fits({ x, y, s, ax, ay, as }, relaxed)) continue;
+
+    blocks.push({
+      baseX: x, baseY: y, baseS: s,
+      ampX: ax, ampY: ay, ampS: as,
+      phX: rand(0, 6.28), phY: rand(0, 6.28), phS: rand(0, 6.28),
+      frX: rand(0.00032, 0.00062), frY: rand(0.00032, 0.00062), frS: rand(0.00028, 0.00055),
+      color, link,
+      // each corner shoots one ray: true = vertical, false = horizontal
+      rays: { tl: Math.random() < 0.5, tr: Math.random() < 0.5,
+              bl: Math.random() < 0.5, br: Math.random() < 0.5 },
+    });
+    return true;
+  }
+  return false;
+}
+
+function fits(c, relaxed) {
+  for (const q of blocks) {
+    const ix = c.ax + c.as + q.ampX + q.ampS + PAD;
+    const iy = c.ay + c.as + q.ampY + q.ampS + PAD;
+    if (c.x < q.baseX + q.baseS + ix && c.x + c.s > q.baseX - ix &&
+        c.y < q.baseY + q.baseS + iy && c.y + c.s > q.baseY - iy) return false;
+
+    if (!relaxed) {
+      const cvx = [c.x, c.x + c.s], qvx = [q.baseX, q.baseX + q.baseS];
+      const chy = [c.y, c.y + c.s], qhy = [q.baseY, q.baseY + q.baseS];
+      for (const a of cvx) for (const b of qvx) if (Math.abs(a - b) < DEDGE) return false;
+      for (const a of chy) for (const b of qhy) if (Math.abs(a - b) < DEDGE) return false;
+    }
+  }
+  return true;
+}
+
+/* ── Rays from block corners — STOP at the first block. Each corner shoots only
+      ONE ray (vertical OR horizontal, chosen at random per block). ───────── */
+function upTo(x, y0, src, boxes) {       // nearest block edge above the corner
+  let s = 0;
+  for (const b of boxes)
+    if (b !== src && b.x < x - 0.5 && x < b.x + b.s - 0.5 && b.y + b.s <= y0 + 0.5)
+      s = Math.max(s, b.y + b.s);
+  return s;
+}
+function downTo(x, y1, src, boxes) {
+  let s = H;
+  for (const b of boxes)
+    if (b !== src && b.x < x - 0.5 && x < b.x + b.s - 0.5 && b.y >= y1 - 0.5)
+      s = Math.min(s, b.y);
+  return s;
+}
+function leftTo(y, x0, src, boxes) {
+  let s = 0;
+  for (const b of boxes)
+    if (b !== src && b.y < y - 0.5 && y < b.y + b.s - 0.5 && b.x + b.s <= x0 + 0.5)
+      s = Math.max(s, b.x + b.s);
+  return s;
+}
+function rightTo(y, x1, src, boxes) {
+  let s = W;
+  for (const b of boxes)
+    if (b !== src && b.y < y - 0.5 && y < b.y + b.s - 0.5 && b.x >= x1 - 0.5)
+      s = Math.min(s, b.x);
+  return s;
+}
+
+function seg(x1, y1, x2, y2) {
+  ctx.beginPath();
+  ctx.moveTo(x1, y1);
+  ctx.lineTo(x2, y2);
+  ctx.stroke();
+}
+
+// Draw an image to cover a square box (object-fit: cover), clipped to the box.
+function drawCover(img, x, y, s) {
+  if (!img || !img.complete || !img.naturalWidth) return;
+  const k = Math.max(s / img.naturalWidth, s / img.naturalHeight);
+  const dw = img.naturalWidth * k, dh = img.naturalHeight * k;
+  ctx.save();
+  ctx.beginPath();
+  ctx.rect(x, y, s, s);
+  ctx.clip();
+  ctx.drawImage(img, x + (s - dw) / 2, y + (s - dh) / 2, dw, dh);
+  ctx.restore();
+}
+
+// Mix a hex color toward white by t (0 = same, 1 = white).
+function lighten(hex, t) {
+  const n = parseInt(hex.slice(1), 16);
+  const mix = v => Math.round(v + (255 - v) * t);
+  return `rgb(${mix((n >> 16) & 255)},${mix((n >> 8) & 255)},${mix(n & 255)})`;
+}
+
+// Draw a label sized to fill the box: font set to ~the box height, then squeezed
+// horizontally so the text width matches the box width.
+function fitLabel(label, cx, cy, box, color) {
+  ctx.textAlign    = 'center';
+  ctx.textBaseline = 'alphabetic';
+  const base = 100;
+  ctx.font = `bold ${base}px Helvetica, Arial, sans-serif`;
+  const m0   = ctx.measureText(label);
+  const asc  = m0.actualBoundingBoxAscent  || base * 0.70;
+  const desc = m0.actualBoundingBoxDescent || base * 0.02;
+  const fpx  = base * (box * 0.90) / (asc + desc);   // fill ~90% of the height
+
+  ctx.font = `bold ${fpx}px Helvetica, Arial, sans-serif`;
+  const w = ctx.measureText(label).width || 1;
+  const scaleX = (box * 0.94) / w;                   // stretch/squeeze to ~94% of the width
+
+  const ascF = asc * fpx / base, descF = desc * fpx / base;
+  ctx.save();
+  ctx.translate(cx, cy);
+  ctx.scale(scaleX, 1);
+  ctx.fillStyle = color;
+  ctx.fillText(label, 0, (ascF - descF) / 2);
+  ctx.restore();
+}
+
+/* ── Hit-test ───────────────────────────────────────────────────────── */
+function hitTest(mx, my) {
+  for (const b of liveSquares)
+    if (mx >= b.x && mx < b.x + b.s && my >= b.y && my < b.y + b.s) return b;
+  return null;
+}
+
+/* ── Render ─────────────────────────────────────────────────────────── */
+function draw(t) {
+  ctx.clearRect(0, 0, W, H);
+
+  const live = blocks.map(b => ({
+    x: b.baseX + b.ampX * Math.sin(t * b.frX + b.phX),
+    y: b.baseY + b.ampY * Math.sin(t * b.frY + b.phY),
+    s: b.baseS + b.ampS * Math.sin(t * b.frS + b.phS),
+    color: b.color, link: b.link, rays: b.rays,
+  }));
+  liveSquares = live.filter(b => b.link);
+
+  // 1) Fills — and on hover, the week image laid opaquely over the color
+  //    (behind the number, which is drawn last).
+  for (const b of live) {
+    ctx.fillStyle = b.color;
+    ctx.fillRect(b.x, b.y, b.s, b.s);
+    if (b.link && hoverLink === b.link) drawCover(IMAGES[b.link.label], b.x, b.y, b.s);
+  }
+
+  // 2) Each block: a frame (keeps the square closed) plus ONE ray per corner —
+  //    vertical or horizontal at random — each ray stopping at the first block.
+  ctx.lineWidth = LW;
+  ctx.lineCap   = 'butt';
+  for (const b of live) {
+    ctx.strokeStyle = b.color;
+    const x0 = b.x, x1 = b.x + b.s, y0 = b.y, y1 = b.y + b.s, r = b.rays;
+    ctx.strokeRect(x0, y0, b.s, b.s);
+    r.tl ? seg(x0, upTo(x0, y0, b, live), x0, y0) : seg(leftTo(y0, x0, b, live), y0, x0, y0);
+    r.tr ? seg(x1, upTo(x1, y0, b, live), x1, y0) : seg(x1, y0, rightTo(y0, x1, b, live), y0);
+    r.bl ? seg(x0, y1, x0, downTo(x0, y1, b, live)) : seg(leftTo(y1, x0, b, live), y1, x0, y1);
+    r.br ? seg(x1, y1, x1, downTo(x1, y1, b, live)) : seg(x1, y1, rightTo(y1, x1, b, live), y1);
+  }
+  ctx.strokeStyle = '#111';
+  ctx.lineJoin = 'miter';
+  ctx.strokeRect(LW / 2, LW / 2, W - LW, H - LW);
+
+  // 3) Labels — big, squeezed to fill the box, in a pale tint of the box color.
+  for (const b of liveSquares)
+    fitLabel(b.link.label, b.x + b.s / 2, b.y + b.s / 2, b.s, lighten(b.color, 0.62));
+}
+
+/* ── Events ─────────────────────────────────────────────────────────── */
+cvs.addEventListener('click', e => {
+  const hit = hitTest(e.clientX, e.clientY);
+  if (hit) window.open(hit.link.url, '_blank');
+});
+
+cvs.addEventListener('mousemove', e => {
+  const hit = hitTest(e.clientX, e.clientY);
+  hoverLink = hit ? hit.link : null;
+  cvs.style.cursor = hoverLink ? 'pointer' : 'default';
+
+  if (hoverLink) {
+    tipEl.textContent = 'Week' + hit.link.label;
+    tipEl.style.display = 'block';
+    let tx = e.clientX + 14;
+    let ty = e.clientY - 36;
+    const tw = tipEl.offsetWidth;
+    if (tx + tw > W - 8) tx = e.clientX - tw - 14;
+    if (ty < 6)          ty = e.clientY + 14;
+    tipEl.style.left = tx + 'px';
+    tipEl.style.top  = ty + 'px';
+  } else {
+    tipEl.style.display = 'none';
+  }
+});
+
+cvs.addEventListener('mouseleave', () => {
+  hoverLink = null;
+  tipEl.style.display = 'none';
+});
+
+window.addEventListener('resize', genLayout);
+
+/* ── Boot ───────────────────────────────────────────────────────────── */
+genLayout();
+requestAnimationFrame(function loop(t) { draw(t); requestAnimationFrame(loop); });
+</script>
+</body>
+</html>
