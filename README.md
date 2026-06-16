@@ -13,11 +13,10 @@ An interactive, Mondrian‑inspired archive of my ICC (Introduction to Computati
 - **Click‑through** — clicking a box opens the live p5.js sketch.
 
 ## Tech
-Vanilla JavaScript + HTML5 Canvas 2D. No frameworks, no build step. Deployed with GitHub Pages via GitHub Actions.
+Vanilla JavaScript + HTML5 Canvas 2D. No frameworks, no build step. Hosted on GitHub Pages.
 
 ## Structure
 ```
-index.html              # the whole app
-image/                  # w2…w10.png hover previews
-.github/workflows/      # Pages deploy workflow
+index.html      # the whole app
+image/          # w2…w10.png hover previews
 ```
